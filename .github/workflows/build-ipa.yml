@@ -1,0 +1,74 @@
+name: Build MeloNX-Nextendo IPA (unsigned)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - name: Checkout port package
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Extract patches
+        run: |
+          mkdir package
+          unzip -q MeloNX-Nextendo-port-package.zip -d package
+
+      - name: Check out MeloNX base
+        run: |
+          git clone --depth 1 --branch master \
+            https://starforgejo.dev/projects/MeloNX.git MeloNX
+          git -C MeloNX checkout --detach 13700519f3abc4e6d7ed8a065b118b2cc59bcd67
+
+      - name: Apply port patches
+        working-directory: MeloNX
+        run: |
+          for patch in "$GITHUB_WORKSPACE"/package/patches/*.patch; do
+            git apply --check "$patch"
+            git apply "$patch"
+          done
+
+      - name: Restore .NET dependencies
+        working-directory: MeloNX
+        run: dotnet restore
+
+      - name: Build unsigned iOS app
+        working-directory: MeloNX
+        run: |
+          xcodebuild \
+            -project src/MeloNX/MeloNX.xcodeproj \
+            -scheme MeloNX \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package unsigned IPA
+        working-directory: MeloNX
+        run: |
+          app="$(find build/Build/Products -type d -name 'MeloNX.app' -print -quit)"
+          test -n "$app"
+          mkdir -p Payload
+          cp -R "$app" Payload/
+          ditto -c -k --sequesterRsrc --keepParent Payload MeloNX-Nextendo-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeloNX-Nextendo-unsigned-ipa
+          path: MeloNX/MeloNX-Nextendo-unsigned.ipa
+          if-no-files-found: error
